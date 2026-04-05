@@ -80,15 +80,31 @@ def _load_web_config() -> dict:
     except (ImportError, Exception):
         return {}
 
-def _get_backend() -> str:
+def _get_backend(purpose: str = "") -> str:
     """Determine which web backend to use.
 
     Reads ``web.backend`` from config.yaml (set by ``hermes tools``).
+    Optionally reads ``web.search_backend`` or ``web.extract_backend`` for
+    per-purpose overrides (e.g. Exa for search, Firecrawl for extraction).
     Falls back to whichever API key is present for users who configured
     keys manually without running setup.
+
+    Args:
+        purpose: "search", "extract", or "" (empty = use general backend).
     """
-    configured = (_load_web_config().get("backend") or "").lower().strip()
-    if configured in ("parallel", "firecrawl", "tavily", "exa"):
+    _VALID_BACKENDS = ("parallel", "firecrawl", "tavily", "exa")
+    web_config = _load_web_config()
+
+    # Check per-purpose override first (search_backend / extract_backend)
+    if purpose in ("search", "extract"):
+        purpose_key = f"{purpose}_backend"
+        purpose_configured = (web_config.get(purpose_key) or "").lower().strip()
+        if purpose_configured in _VALID_BACKENDS:
+            return purpose_configured
+
+    # Fall back to the general backend setting
+    configured = (web_config.get("backend") or "").lower().strip()
+    if configured in _VALID_BACKENDS:
         return configured
 
     # Fallback for manual / legacy config — pick the highest-priority
@@ -1062,7 +1078,7 @@ def web_search_tool(query: str, limit: int = 5) -> str:
             return json.dumps({"error": "Interrupted", "success": False})
 
         # Dispatch to the configured backend
-        backend = _get_backend()
+        backend = _get_backend(purpose="search")
         if backend == "parallel":
             response_data = _parallel_search(query, limit)
             debug_call_data["results_count"] = len(response_data.get("data", {}).get("web", []))
@@ -1216,7 +1232,7 @@ async def web_extract_tool(
         if not safe_urls:
             results = []
         else:
-            backend = _get_backend()
+            backend = _get_backend(purpose="extract")
 
             if backend == "parallel":
                 results = await _parallel_extract(safe_urls)
@@ -1504,7 +1520,7 @@ async def web_crawl_tool(
     try:
         effective_model = model or _get_default_summarizer_model()
         auxiliary_available = check_auxiliary_model()
-        backend = _get_backend()
+        backend = _get_backend(purpose="extract")
 
         # Tavily supports crawl via its /crawl endpoint
         if backend == "tavily":
