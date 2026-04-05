@@ -251,6 +251,7 @@ def _generate_openai_tts(text: str, output_path: str, tts_config: Dict[str, Any]
     oai_config = tts_config.get("openai", {})
     model = oai_config.get("model", DEFAULT_OPENAI_MODEL)
     voice = oai_config.get("voice", DEFAULT_OPENAI_VOICE)
+    instructions = oai_config.get("instructions", None)
     base_url = oai_config.get("base_url", base_url)
 
     # Determine response format from extension
@@ -262,13 +263,18 @@ def _generate_openai_tts(text: str, output_path: str, tts_config: Dict[str, Any]
     OpenAIClient = _import_openai_client()
     client = OpenAIClient(api_key=api_key, base_url=base_url)
     try:
-        response = client.audio.speech.create(
+        # Build kwargs — instructions only supported by gpt-4o-mini-tts
+        create_kwargs: Dict[str, Any] = dict(
             model=model,
             voice=voice,
             input=text,
             response_format=response_format,
             extra_headers={"x-idempotency-key": str(uuid.uuid4())},
         )
+        if instructions and "4o" in model:
+            create_kwargs["instructions"] = instructions
+
+        response = client.audio.speech.create(**create_kwargs)
 
         response.stream_to_file(output_path)
         return output_path
