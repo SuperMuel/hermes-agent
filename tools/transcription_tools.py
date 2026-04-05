@@ -23,6 +23,7 @@ Usage::
         print(result["transcript"])
 """
 
+import json
 import logging
 import os
 import shlex
@@ -74,7 +75,14 @@ COMMON_LOCAL_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 OPENAI_BASE_URL = os.getenv("STT_OPENAI_BASE_URL", "https://api.openai.com/v1")
 
-SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".aac"}
+# Azure Speech Service defaults
+AZURE_SPEECH_KEY_ENV = "AZURE_SPEECH_KEY_EASTUS"
+AZURE_SPEECH_REGION_ENV = "AZURE_SPEECH_REGION_EASTUS"
+AZURE_SPEECH_ENDPOINT_ENV = "AZURE_SPEECH_ENDPOINT_EASTUS"
+DEFAULT_AZURE_STT_MODEL = "mai-transcribe-1"  # or None for standard
+AZURE_SUPPORTED_FORMATS = {".wav", ".mp3", ".flac"}
+
+SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".aac", ".opus", ".flac"}
 LOCAL_NATIVE_AUDIO_FORMATS = {".wav", ".aiff", ".aif"}
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 
@@ -228,6 +236,16 @@ def _get_provider(stt_config: dict) -> str:
                 return "openai"
             logger.warning(
                 "STT provider 'openai' configured but no API key available"
+            )
+            return "none"
+
+        if provider == "azure":
+            azure_cfg = _get_azure_config(stt_config)
+            if azure_cfg["key"] and azure_cfg["region"]:
+                return "azure"
+            logger.warning(
+                "STT provider 'azure' configured but %s or %s not set",
+                AZURE_SPEECH_KEY_ENV, AZURE_SPEECH_REGION_ENV,
             )
             return "none"
 
@@ -506,6 +524,116 @@ def _transcribe_openai(file_path: str, model_name: str) -> Dict[str, Any]:
         return {"success": False, "transcript": "", "error": f"Transcription failed: {e}"}
 
 # ---------------------------------------------------------------------------
+# Provider: azure (Azure Speech Service / MAI-Transcribe-1)
+# ---------------------------------------------------------------------------
+
+
+def _get_azure_config(stt_config: dict) -> dict:
+    """Resolve Azure Speech credentials from config and env vars."""
+    azure_cfg = stt_config.get("azure", {})
+    key = azure_cfg.get("key") or os.getenv(AZURE_SPEECH_KEY_ENV, "")
+    region = azure_cfg.get("region") or os.getenv(AZURE_SPEECH_REGION_ENV, "")
+    endpoint = azure_cfg.get("endpoint") or os.getenv(AZURE_SPEECH_ENDPOINT_ENV, "")
+    model = azure_cfg.get("model", DEFAULT_AZURE_STT_MODEL)
+    return {"key": key.strip(), "region": region.strip(), "endpoint": endpoint.strip(), "model": model}
+
+
+def _convert_to_azure_format(file_path: str) -> tuple[Optional[str], Optional[str]]:
+    """Convert audio to WAV if needed for Azure Speech API."""
+    audio_path = Path(file_path)
+    if audio_path.suffix.lower() in AZURE_SUPPORTED_FORMATS:
+        return file_path, None
+
+    ffmpeg = _find_ffmpeg_binary()
+    if not ffmpeg:
+        return None, "Azure STT requires ffmpeg to convert non-WAV/MP3/FLAC audio, but ffmpeg was not found"
+
+    converted = Path(tempfile.gettempdir()) / f"hermes_azure_stt_{audio_path.stem}.wav"
+    try:
+        subprocess.run(
+            [ffmpeg, "-y", "-i", file_path, "-ar", "16000", "-ac", "1", str(converted)],
+            check=True, capture_output=True, text=True,
+        )
+        return str(converted), None
+    except subprocess.CalledProcessError as e:
+        details = e.stderr.strip() or e.stdout.strip() or str(e)
+        return None, f"Failed to convert audio for Azure STT: {details}"
+
+
+def _transcribe_azure(file_path: str, stt_config: dict) -> Dict[str, Any]:
+    """Transcribe using Azure Speech Service (standard or MAI-Transcribe-1)."""
+    cfg = _get_azure_config(stt_config)
+
+    if not cfg["key"]:
+        return {"success": False, "transcript": "", "error": f"{AZURE_SPEECH_KEY_ENV} not set"}
+    if not cfg["region"]:
+        return {"success": False, "transcript": "", "error": f"{AZURE_SPEECH_REGION_ENV} not set"}
+
+    # Convert audio format if needed (Azure only supports WAV, MP3, FLAC)
+    converted_path, convert_error = _convert_to_azure_format(file_path)
+    if convert_error:
+        return {"success": False, "transcript": "", "error": convert_error}
+
+    # Build the API URL — prefer custom endpoint, fall back to regional
+    if cfg["endpoint"]:
+        base = cfg["endpoint"].rstrip("/")
+    else:
+        base = f"https://{cfg['region']}.api.cognitive.microsoft.com"
+    url = f"{base}/speechtotext/transcriptions:transcribe?api-version=2025-10-15"
+
+    # Build the definition — use MAI model if configured, otherwise standard
+    if cfg["model"]:
+        definition = {"enhancedMode": {"enabled": True, "model": cfg["model"]}}
+    else:
+        # Standard mode — try to auto-detect language
+        definition = {"locales": ["fr-FR", "en-US"]}
+
+    try:
+        import requests as _requests
+
+        with open(converted_path, "rb") as audio:
+            audio_filename = Path(converted_path).name
+            files = {
+                "audio": (audio_filename, audio, "audio/wav"),
+                "definition": (None, json.dumps(definition), "application/json"),
+            }
+            response = _requests.post(
+                url,
+                headers={"Ocp-Apim-Subscription-Key": cfg["key"]},
+                files=files,
+                timeout=60,
+            )
+
+        if response.status_code != 200:
+            error_msg = response.text[:500]
+            logger.error("Azure STT API error (%d): %s", response.status_code, error_msg)
+            return {"success": False, "transcript": "", "error": f"Azure API error ({response.status_code}): {error_msg}"}
+
+        result = response.json()
+        combined = result.get("combinedPhrases", [])
+        transcript = " ".join(p.get("text", "").strip() for p in combined).strip()
+
+        model_label = cfg["model"] or "standard"
+        logger.info(
+            "Transcribed %s via Azure Speech (%s, %d chars)",
+            Path(file_path).name, model_label, len(transcript),
+        )
+
+        return {"success": True, "transcript": transcript, "provider": f"azure/{model_label}"}
+
+    except Exception as e:
+        logger.error("Azure transcription failed: %s", e, exc_info=True)
+        return {"success": False, "transcript": "", "error": f"Azure transcription failed: {e}"}
+    finally:
+        # Clean up converted file if we created one
+        if converted_path != file_path:
+            try:
+                Path(converted_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -565,6 +693,9 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         openai_cfg = stt_config.get("openai", {})
         model_name = model or openai_cfg.get("model", DEFAULT_STT_MODEL)
         return _transcribe_openai(file_path, model_name)
+
+    if provider == "azure":
+        return _transcribe_azure(file_path, stt_config)
 
     # No provider available
     return {
