@@ -2,8 +2,10 @@
 """
 Transcription Tools Module
 
-Provides speech-to-text transcription with six providers:
+Provides speech-to-text transcription with multiple providers:
 
+  - **gemini** — Google Gemini multimodal API, requires ``GOOGLE_AI_API_KEY``.
+    Accepts audio natively (ogg, mp3, wav, etc.) — no conversion needed.
   - **local** (default, free) — faster-whisper running locally, no API key needed.
     Auto-downloads the model (~150 MB for ``base``) on first use.
   - **groq** (free tier) — Groq Whisper API, requires ``GROQ_API_KEY``.
@@ -78,6 +80,7 @@ def _safe_find_spec(module_name: str) -> bool:
 _HAS_FASTER_WHISPER = _safe_find_spec("faster_whisper")
 _HAS_OPENAI = _safe_find_spec("openai")
 _HAS_MISTRAL = _safe_find_spec("mistralai")
+_HAS_GOOGLE_GENAI = _safe_find_spec("google.genai")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -99,7 +102,26 @@ OPENAI_BASE_URL = os.getenv("STT_OPENAI_BASE_URL", "https://api.openai.com/v1")
 XAI_STT_BASE_URL = os.getenv("XAI_STT_BASE_URL", "https://api.x.ai/v1")
 ELEVENLABS_STT_BASE_URL = os.getenv("ELEVENLABS_STT_BASE_URL", "https://api.elevenlabs.io/v1")
 
-SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".aac", ".flac"}
+# Gemini (Google AI) defaults
+GEMINI_API_KEY_ENV = "GOOGLE_AI_API_KEY"
+GEMINI_API_KEY_ALIAS_ENV = "GEMINI_API_KEY"
+DEFAULT_GEMINI_STT_MODEL = "gemini-3-flash-preview"
+GEMINI_TRANSCRIPTION_PROMPT = (
+    "Transcribe this audio exactly as spoken. "
+    "Output ONLY the raw transcript text. "
+    "No labels, no timestamps, no formatting, no commentary."
+)
+_GEMINI_MIME_MAP = {
+    ".ogg": "audio/ogg", ".opus": "audio/opus",
+    ".mp3": "audio/mp3", ".wav": "audio/wav",
+    ".m4a": "audio/mp4", ".mp4": "audio/mp4",
+    ".webm": "audio/webm", ".flac": "audio/flac",
+    ".aac": "audio/aac", ".mpga": "audio/mpeg",
+    ".mpeg": "audio/mpeg",
+}
+
+
+SUPPORTED_FORMATS = {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm", ".ogg", ".aac", ".opus", ".flac"}
 LOCAL_NATIVE_AUDIO_FORMATS = {".wav", ".aiff", ".aif"}
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 
@@ -141,6 +163,11 @@ def _has_openai_audio_backend() -> bool:
         return True
     except ValueError:
         return False
+
+
+def _resolve_gemini_api_key() -> Optional[str]:
+    """Return the Gemini API key from env vars, or None."""
+    return get_env_value(GEMINI_API_KEY_ENV) or get_env_value(GEMINI_API_KEY_ALIAS_ENV) or None
 
 
 def _find_binary(binary_name: str) -> Optional[str]:
@@ -228,7 +255,7 @@ def _try_lazy_install_stt() -> bool:
     return False
 
 
-# Names of the 6 STT providers with native handlers in this module.
+# Names of the 7 STT providers with native handlers in this module.
 # Kept in sync with ``agent.transcription_registry._BUILTIN_NAMES`` —
 # a regression test fails if they drift. The plugin hook from
 # issue #30398-style follow-up rejects plugins registering under any
@@ -241,6 +268,7 @@ BUILTIN_STT_PROVIDERS = frozenset({
     "openai",
     "mistral",
     "xai",
+    "gemini",
 })
 
 
@@ -826,12 +854,24 @@ def _get_provider(stt_config: dict) -> str:
             )
             return "none"
 
+        if provider == "gemini":
+            if _HAS_GOOGLE_GENAI and _resolve_gemini_api_key():
+                return "gemini"
+            logger.warning(
+                "STT provider 'gemini' configured but google-genai package "
+                "not installed or %s not set", GEMINI_API_KEY_ENV,
+            )
+            return "none"
+
         return provider  # Unknown — let it fail downstream
 
-    # --- Auto-detect (no explicit provider): local > groq > openai > xai > elevenlabs -
+    # --- Auto-detect (no explicit provider): gemini > local > local_command > groq > openai > mistral > xai > elevenlabs ---
     # mistral is intentionally skipped while `mistralai` is quarantined on
     # PyPI (malicious 2.4.6 release on 2026-05-12).
 
+    if _HAS_GOOGLE_GENAI and _resolve_gemini_api_key():
+        logger.info("Auto-detected Gemini STT (GOOGLE_AI_API_KEY set)")
+        return "gemini"
     if _HAS_FASTER_WHISPER:
         return "local"
     if _has_local_command():
@@ -1421,6 +1461,73 @@ def _transcribe_mistral(file_path: str, model_name: str) -> Dict[str, Any]:
         logger.error("Mistral transcription failed: %s", e, exc_info=True)
         return {"success": False, "transcript": "", "error": f"Mistral transcription failed: {type(e).__name__}"}
 
+# ---------------------------------------------------------------------------
+# Provider: gemini (Google AI generateContent with native audio input)
+# ---------------------------------------------------------------------------
+
+
+def _transcribe_gemini(file_path: str, model_name: str) -> Dict[str, Any]:
+    """Transcribe using Gemini generateContent with native audio input."""
+    api_key = _resolve_gemini_api_key()
+    if not api_key:
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"{GEMINI_API_KEY_ENV} or {GEMINI_API_KEY_ALIAS_ENV} not set",
+        }
+
+    if not _HAS_GOOGLE_GENAI:
+        return {
+            "success": False,
+            "transcript": "",
+            "error": "google-genai package not installed",
+        }
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        audio_path = Path(file_path)
+        mime_type = _GEMINI_MIME_MAP.get(audio_path.suffix.lower(), "audio/ogg")
+
+        client = genai.Client(api_key=api_key)
+
+        with open(file_path, "rb") as f:
+            audio_bytes = f.read()
+
+        response = client.models.generate_content(
+            model=model_name,
+            contents=[
+                GEMINI_TRANSCRIPTION_PROMPT,
+                types.Part.from_bytes(data=audio_bytes, mime_type=mime_type),
+            ],
+            config=types.GenerateContentConfig(temperature=0),
+        )
+
+        transcript_text = _extract_transcript_text(response)
+        if not transcript_text:
+            return {
+                "success": False,
+                "transcript": "",
+                "error": "Gemini returned empty transcription",
+            }
+
+        logger.info(
+            "Transcribed %s via Gemini API (%s, %d chars)",
+            audio_path.name, model_name, len(transcript_text),
+        )
+        return {"success": True, "transcript": transcript_text, "provider": "gemini"}
+
+    except PermissionError:
+        return {"success": False, "transcript": "", "error": f"Permission denied: {file_path}"}
+    except Exception as e:
+        logger.error("Gemini transcription failed: %s", e, exc_info=True)
+        return {
+            "success": False,
+            "transcript": "",
+            "error": f"Gemini transcription failed: {e}",
+        }
+
 
 # ---------------------------------------------------------------------------
 # Provider: xAI (Grok STT API)
@@ -1693,6 +1800,11 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         model_name = model or elevenlabs_cfg.get("model_id", DEFAULT_ELEVENLABS_STT_MODEL)
         return _transcribe_elevenlabs(file_path, model_name)
 
+    if provider == "gemini":
+        gemini_cfg = stt_config.get("gemini", {})
+        model_name = model or gemini_cfg.get("model", DEFAULT_GEMINI_STT_MODEL)
+        return _transcribe_gemini(file_path, model_name)
+
     # User-declared command-type provider
     # (``stt.providers.<name>: type: command``). Fires after the built-in
     # elif chain — built-in names short-circuit upstream so a user's
@@ -1740,7 +1852,8 @@ def transcribe_audio(file_path: str, model: Optional[str] = None) -> Dict[str, A
         "success": False,
         "transcript": "",
         "error": (
-            "No STT provider available. Install faster-whisper for free local "
+            "No STT provider available. Set GOOGLE_AI_API_KEY for Gemini STT, "
+            "install faster-whisper for free local "
             f"transcription, configure {LOCAL_STT_COMMAND_ENV} or install a local whisper CLI, "
             "set GROQ_API_KEY for free Groq Whisper, set MISTRAL_API_KEY for Mistral "
             "Voxtral Transcribe, configure xAI OAuth or set XAI_API_KEY for xAI Grok STT, "
