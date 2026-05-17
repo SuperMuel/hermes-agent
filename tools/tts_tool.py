@@ -194,7 +194,7 @@ DEFAULT_XAI_SPEED_DEFAULT = 1.0
 # xAI TTS `optimize_streaming_latency` accepts 0, 1, or 2; 0 (best quality) is
 # the API default (omitted => default). Values >0 trade quality for time-to-first-audio.
 DEFAULT_XAI_OPTIMIZE_STREAMING_LATENCY_DEFAULT = 0
-DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+DEFAULT_GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 DEFAULT_GEMINI_TTS_VOICE = "Kore"
 DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_AUDIO_TAGS = False
@@ -1511,7 +1511,11 @@ def _resolve_gemini_persona_prompt_path(gemini_config: Dict[str, Any]) -> Option
 
 
 def _read_gemini_persona_prompt(gemini_config: Dict[str, Any]) -> str:
-    """Read the Gemini persona prompt file, failing soft on config mistakes."""
+    """Read Gemini persona prompt from inline config or file, failing soft on config mistakes."""
+    inline_prompt = gemini_config.get("prompt")
+    if isinstance(inline_prompt, str) and inline_prompt.strip():
+        return inline_prompt.strip()
+
     path = _resolve_gemini_persona_prompt_path(gemini_config)
     if path is None:
         return ""
@@ -1666,10 +1670,16 @@ def _generate_gemini_tts(text: str, output_path: str, tts_config: Dict[str, Any]
     """
     import requests
 
-    api_key = (get_env_value("GEMINI_API_KEY") or get_env_value("GOOGLE_API_KEY") or "").strip()
+    api_key = (
+        get_env_value("GOOGLE_AI_API_KEY")
+        or get_env_value("GEMINI_API_KEY")
+        or get_env_value("GOOGLE_API_KEY")
+        or ""
+    ).strip()
     if not api_key:
         raise ValueError(
-            "GEMINI_API_KEY not set. Get one at https://aistudio.google.com/app/apikey"
+            "GOOGLE_AI_API_KEY (or GEMINI_API_KEY/GOOGLE_API_KEY) not set. "
+            "Get one at https://aistudio.google.com/app/apikey"
         )
 
     raw_gemini_config = tts_config.get("gemini", {})
@@ -2821,7 +2831,7 @@ TTS_SCHEMA = {
         "properties": {
             "text": {
                 "type": "string",
-                "description": "The text to convert to speech. Provider-specific character caps apply and are enforced automatically (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k depending on model); over-long input is truncated."
+                "description": "The text to convert to speech. Provider-specific character caps apply and are enforced automatically (OpenAI 4096, xAI 15000, MiniMax 10000, ElevenLabs 5k-40k depending on model); over-long input is truncated. The TTS provider supports expressive audio tags like [warm], [excited], [whispers], [laughs], [gentle pause] inline in the text for natural delivery control."
             },
             "output_path": {
                 "type": "string",
