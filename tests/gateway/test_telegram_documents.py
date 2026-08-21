@@ -28,7 +28,11 @@ from gateway.platforms.base import (
 # Mock the telegram package if it's not installed
 # ---------------------------------------------------------------------------
 # Now we can safely import
-from plugins.platforms.telegram.adapter import TelegramAdapter  # noqa: E402
+from plugins.platforms.telegram.adapter import (  # noqa: E402
+    TelegramAdapter,
+    _MEDIA_DOWNLOAD_CONNECT_TIMEOUT,
+    _MEDIA_DOWNLOAD_READ_TIMEOUT,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +162,40 @@ def _make_photo(file_obj=None):
 
 
 class TestDocumentDownloadBlock:
+
+    @pytest.mark.asyncio
+    async def test_media_download_retries_transient_timeout(self, adapter, monkeypatch):
+        """A transient getFile timeout should not discard inbound media."""
+        timed_out = type("TimedOut", (Exception,), {})
+        file_obj = _make_file_obj(b"photo-after-retry")
+        photo = _make_photo(file_obj)
+        photo.get_file = AsyncMock(side_effect=[timed_out("slow Telegram response"), file_obj])
+
+        async def _no_sleep(_delay):
+            return None
+
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+        downloaded_file, data = await adapter._download_telegram_media(photo)
+
+        assert downloaded_file is file_obj
+        assert data == bytearray(b"photo-after-retry")
+        assert photo.get_file.await_count == 2
+        get_kwargs = photo.get_file.await_args_list[0].kwargs
+        assert get_kwargs["read_timeout"] == _MEDIA_DOWNLOAD_READ_TIMEOUT
+        assert get_kwargs["connect_timeout"] == _MEDIA_DOWNLOAD_CONNECT_TIMEOUT
+        download_kwargs = file_obj.download_as_bytearray.await_args.kwargs
+        assert download_kwargs["read_timeout"] == _MEDIA_DOWNLOAD_READ_TIMEOUT
+        assert download_kwargs["connect_timeout"] == _MEDIA_DOWNLOAD_CONNECT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_media_download_does_not_retry_non_network_error(self, adapter):
+        photo = _make_photo()
+        photo.get_file = AsyncMock(side_effect=RuntimeError("invalid media"))
+
+        with pytest.raises(RuntimeError, match="invalid media"):
+            await adapter._download_telegram_media(photo)
+
+        assert photo.get_file.await_count == 1
 
 
     @pytest.mark.asyncio
