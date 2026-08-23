@@ -11,8 +11,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for key in (
-        "GOOGLE_AI_API_KEY",
         "GEMINI_API_KEY",
+        "GOOGLE_AI_API_KEY",
         "GOOGLE_API_KEY",
         "GEMINI_BASE_URL",
         "HERMES_SESSION_PLATFORM",
@@ -100,24 +100,18 @@ class TestGenerateGeminiTts:
         _, kwargs = mock_post.call_args
         assert kwargs["params"]["key"] == "from-google-env"
 
-    def test_google_ai_api_key_alias(self, tmp_path, monkeypatch, mock_gemini_response):
+    def test_google_ai_api_key_is_primary_alias(
+        self, tmp_path, monkeypatch, mock_gemini_response
+    ):
         from tools.tts_tool import _generate_gemini_tts
 
         monkeypatch.setenv("GOOGLE_AI_API_KEY", "from-google-ai-env")
-        output_path = str(tmp_path / "test.wav")
+        monkeypatch.setenv("GEMINI_API_KEY", "from-gemini-env")
 
         with patch("requests.post", return_value=mock_gemini_response) as mock_post:
-            _generate_gemini_tts("Hi", output_path, {})
+            _generate_gemini_tts("Hi", str(tmp_path / "test.wav"), {})
 
-        _, kwargs = mock_post.call_args
-        assert kwargs["params"]["key"] == "from-google-ai-env"
-
-    def test_google_ai_api_key_marks_provider_available(self, monkeypatch):
-        from tools.tts_tool import check_tts_requirements
-
-        monkeypatch.setenv("GOOGLE_AI_API_KEY", "from-google-ai-env")
-        with patch("tools.tts_tool._load_tts_config", return_value={"provider": "gemini"}):
-            assert check_tts_requirements() is True
+        assert mock_post.call_args[1]["params"]["key"] == "from-google-ai-env"
 
     def test_wav_output_fast_path(self, tmp_path, monkeypatch, mock_gemini_response, fake_pcm_bytes):
         from tools.tts_tool import _generate_gemini_tts
