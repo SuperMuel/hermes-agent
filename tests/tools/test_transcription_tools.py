@@ -85,6 +85,8 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("MISTRAL_API_KEY", raising=False)
     monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_AI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("HERMES_LOCAL_STT_COMMAND", raising=False)
     monkeypatch.delenv("HERMES_LOCAL_STT_LANGUAGE", raising=False)
 
@@ -108,9 +110,18 @@ class TestGetProviderFallbackPriority:
 
     def test_auto_detect_prefers_local(self):
         """Auto-detect prefers local over any cloud provider."""
-        with patch("tools.transcription_tools._HAS_FASTER_WHISPER", True):
+        with patch("tools.transcription_tools._HAS_GOOGLE_GENAI", False), \
+             patch("tools.transcription_tools._HAS_FASTER_WHISPER", True):
             from tools.transcription_tools import _get_provider
             assert _get_provider({}) == "local"
+
+    def test_auto_detect_prefers_gemini_over_local(self, monkeypatch):
+        """Samuel's Gemini provider remains the top auto-detect choice."""
+        monkeypatch.setenv("GOOGLE_AI_API_KEY", "google-ai-test")
+        with patch("tools.transcription_tools._HAS_GOOGLE_GENAI", True), \
+             patch("tools.transcription_tools._HAS_FASTER_WHISPER", True):
+            from tools.transcription_tools import _get_provider
+            assert _get_provider({}) == "gemini"
 
     def test_unknown_provider_passed_through(self):
         from tools.transcription_tools import _get_provider
