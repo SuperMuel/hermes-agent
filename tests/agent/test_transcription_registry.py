@@ -86,7 +86,6 @@ class TestRegistration:
             "xai",
             "elevenlabs",
             "deepinfra",
-            "gemini",
         ],
     )
     def test_rejects_builtin_shadow_with_warning(self, builtin, caplog):

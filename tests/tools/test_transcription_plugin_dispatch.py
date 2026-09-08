@@ -129,6 +129,25 @@ class TestPluginDispatch:
         assert provider.last_call is not None
         assert provider.last_call["file_path"] == "/tmp/audio.mp3"
 
+    def test_gemini_stt_plugin_id_is_dispatchable(self):
+        """Gemini STT remains an ordinary plugin provider, not a built-in."""
+        provider = _FakeProvider(name="gemini-stt")
+        transcription_registry.register_provider(provider)
+
+        result = transcription_tools._dispatch_to_plugin_provider(
+            "/tmp/audio.mp3", "gemini-stt",
+        )
+
+        assert result == {
+            "success": True,
+            "transcript": "fake transcript",
+            "provider": "gemini-stt",
+        }
+        assert provider.last_call == {
+            "file_path": "/tmp/audio.mp3",
+            "kwargs": {"model": None, "language": None},
+        }
+
     def test_unregistered_name_returns_none(self):
         """Unknown name + no plugin → return None so the caller surfaces
         the legacy 'No STT provider available' error."""
