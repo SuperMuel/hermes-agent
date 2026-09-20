@@ -49,7 +49,7 @@ DEFAULT_XAI_SPEED_MAX = 1.5
 DEFAULT_XAI_SPEED_DEFAULT = 1.0
 DEFAULT_XAI_OPTIMIZE_STREAMING_LATENCY_DEFAULT = 0
 DEFAULT_XAI_TEXT_NORMALIZATION_DEFAULT = False
-DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
+DEFAULT_GEMINI_TTS_MODEL = "gemini-3.1-flash-tts-preview"
 DEFAULT_GEMINI_TTS_VOICE = "Kore"
 DEFAULT_GEMINI_TTS_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_GEMINI_AUDIO_TAGS = False
@@ -470,7 +470,10 @@ def _generate_mistral_tts(text: str, output_path: str, tts_config: Dict[str, Any
 
 # --- Google Gemini TTS ---
 def _read_gemini_persona_prompt(gemini_config: Dict[str, Any]) -> str:
-    """Read ``tts.gemini.persona_prompt_file`` (relative -> under HERMES_HOME), failing soft."""
+    """Read an inline or file-based Gemini persona prompt, failing soft."""
+    inline = gemini_config.get("prompt")
+    if isinstance(inline, str) and inline.strip():
+        return inline.strip()
     raw = gemini_config.get("persona_prompt_file")
     if not isinstance(raw, str) or not raw.strip():
         return ""
@@ -560,10 +563,16 @@ def _generate_gemini_tts(text: str, output_path: str, tts_config: Dict[str, Any]
     """Generate audio via Gemini ``generateContent`` (``responseModalities=["AUDIO"]``). The reply is
     base64 24kHz mono 16-bit PCM, wrapped as WAV and ffmpeg-converted to the requested container."""
     origin = _origin()
-    api_key = origin._resolve_provider_key("GEMINI_API_KEY", "gemini") or origin._resolve_provider_key(
-        "GOOGLE_API_KEY", "gemini")
+    api_key = (
+        origin._resolve_provider_key("GOOGLE_AI_API_KEY", "gemini")
+        or origin._resolve_provider_key("GEMINI_API_KEY", "gemini")
+        or origin._resolve_provider_key("GOOGLE_API_KEY", "gemini")
+    )
     if not api_key:
-        raise ValueError("GEMINI_API_KEY not set. Get one at https://aistudio.google.com/app/apikey")
+        raise ValueError(
+            "GOOGLE_AI_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY not set. "
+            "Get one at https://aistudio.google.com/app/apikey"
+        )
     gemini_config = _section(tts_config, "gemini")
     model = str(gemini_config.get("model", DEFAULT_GEMINI_TTS_MODEL)).strip() or DEFAULT_GEMINI_TTS_MODEL
     voice = str(gemini_config.get("voice", DEFAULT_GEMINI_TTS_VOICE)).strip() or DEFAULT_GEMINI_TTS_VOICE

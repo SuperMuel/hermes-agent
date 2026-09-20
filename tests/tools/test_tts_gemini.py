@@ -11,6 +11,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for key in (
+        "GOOGLE_AI_API_KEY",
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GEMINI_BASE_URL",
@@ -98,6 +99,34 @@ class TestGenerateGeminiTts:
         # Confirm it used the GOOGLE_API_KEY as the query parameter
         _, kwargs = mock_post.call_args
         assert kwargs["params"]["key"] == "from-google-env"
+
+    def test_google_ai_api_key_is_preferred(self, tmp_path, monkeypatch, mock_gemini_response):
+        from tools.tts_tool import _generate_gemini_tts
+
+        monkeypatch.setenv("GOOGLE_AI_API_KEY", "canonical-google-key")
+        monkeypatch.setenv("GEMINI_API_KEY", "legacy-gemini-key")
+
+        with patch("requests.post", return_value=mock_gemini_response) as mock_post:
+            _generate_gemini_tts("Hi", str(tmp_path / "test.wav"), {})
+
+        assert mock_post.call_args[1]["params"]["key"] == "canonical-google-key"
+
+    def test_inline_prompt_overrides_persona_prompt_file(
+        self, tmp_path, monkeypatch, mock_gemini_response
+    ):
+        from tools.tts_tool import _generate_gemini_tts
+
+        monkeypatch.setenv("GOOGLE_AI_API_KEY", "test-key")
+        persona = tmp_path / "persona.md"
+        persona.write_text("file prompt", encoding="utf-8")
+        config = {"gemini": {"prompt": "inline {transcript}", "persona_prompt_file": str(persona)}}
+
+        with patch("requests.post", return_value=mock_gemini_response) as mock_post:
+            _generate_gemini_tts("Hello", str(tmp_path / "test.wav"), config)
+
+        prompt = mock_post.call_args[1]["json"]["contents"][0]["parts"][0]["text"]
+        assert "inline Hello" in prompt
+        assert "file prompt" not in prompt
 
     def test_wav_output_fast_path(self, tmp_path, monkeypatch, mock_gemini_response, fake_pcm_bytes):
         from tools.tts_tool import _generate_gemini_tts
@@ -197,6 +226,7 @@ class TestGeminiInCheckRequirements:
             "MINIMAX_API_KEY",
             "XAI_API_KEY",
             "MISTRAL_API_KEY",
+            "GOOGLE_AI_API_KEY",
             "GOOGLE_API_KEY",
         ):
             monkeypatch.delenv(key, raising=False)
