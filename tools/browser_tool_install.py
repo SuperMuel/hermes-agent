@@ -224,12 +224,23 @@ def _has_chromium_build(root: str) -> bool:
         return False
 
 
+def _configured_chromium_path() -> str:
+    """Profile-local executable override, shared by preflight and daemon launch."""
+    from hermes_cli.config import cfg_get, read_raw_config
+    value = cfg_get(read_raw_config(), "browser", "executable_path", default="")
+    return os.path.expanduser(str(value or "").strip())
+
+
 def _chromium_installed() -> bool:
     """True when a usable Chromium (or headless-shell) build is on disk; cached.
 
     Checks ``AGENT_BROWSER_EXECUTABLE_PATH``, then system Chrome/Chromium on PATH, then Playwright's cache.
     Without a binary the CLI hangs on first use until the command timeout fires, so the tool must not be advertised.
     """
+    configured = _configured_chromium_path()
+    if configured:
+        # Never silently fall back to a system/Snap browser if a pin disappeared.
+        return os.path.isfile(configured) and os.access(configured, os.X_OK)
     _bt = _origin()
     if _bt._cached_chromium_installed is not None:
         return _bt._cached_chromium_installed

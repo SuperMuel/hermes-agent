@@ -125,6 +125,9 @@ def _agent_browser_command_env(socket_dir: str) -> Dict[str, str]:
     env = _bt._build_browser_env()
     env["PATH"] = _install._merge_browser_path(env.get("PATH", ""))
     env["AGENT_BROWSER_SOCKET_DIR"] = socket_dir
+    executable = _install._configured_chromium_path()
+    if executable:
+        env["AGENT_BROWSER_EXECUTABLE_PATH"] = executable
     if "AGENT_BROWSER_IDLE_TIMEOUT_MS" not in env:
         env["AGENT_BROWSER_IDLE_TIMEOUT_MS"] = str(_bt.BROWSER_SESSION_INACTIVITY_TIMEOUT * 1000)
     return env
@@ -570,7 +573,14 @@ def _run_browser_command(
     browser_cmd = preflight["browser_cmd"]
 
     try:
-        session_info = _get_session_info(task_id)
+        if command == "close":
+            # Teardown must not recycle a suspect browser or create a replacement.
+            with _bt._cleanup_lock:
+                session_info = _bt._active_sessions.get(task_id)
+            if session_info is None:
+                return {"success": True, "data": {}}
+        else:
+            session_info = _get_session_info(task_id)
     except Exception as e:
         _bt.logger.warning("Failed to create browser session for task=%s: %s", task_id, e)
         return {"success": False, "error": f"Failed to create browser session: {str(e)}"}

@@ -175,7 +175,7 @@ def _cleanup_inactive_browser_sessions():
                     _force_reap_browser_session(task_id)
             except Exception as reap_exc:
                 _bt.logger.error("Force-reap of browser session %s failed: %s", task_id, reap_exc)
-            finally:
+            else:
                 _forget_session_tracking(task_id, activity=False)
 
 
@@ -337,10 +337,12 @@ def _reap_socket_dir(socket_dir: str, session_name: str, tracked_names: set) -> 
     try:
         if not _terminate_verified_daemon(daemon_pid, session_name, _bt.logger.warning):
             return False
-        _bt.logger.info("Reaped orphaned browser daemon PID %d (session %s)", daemon_pid, session_name)
         reaped = True
     except (ProcessLookupError, PermissionError, OSError):
-        pass
+        return False
+    if _pid_exists(daemon_pid):
+        return False
+    _bt.logger.info("Reaped orphaned browser daemon PID %d (session %s)", daemon_pid, session_name)
     shutil.rmtree(socket_dir, ignore_errors=True)
     return reaped
 
@@ -598,7 +600,6 @@ def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> No
     must still release the cloud session and the local Chromium.
     """
     bb_session_id = session_info.get("bb_session_id", "unknown")
-    _forget_session_tracking(task_id, session=True)
 
     if bb_session_id:  # cloud only — local sidecars have bb_session_id=None
         provider = _cloud._get_cloud_provider()
@@ -612,8 +613,13 @@ def _release_session_resources(task_id: str, session_info: Dict[str, Any]) -> No
     if session_name:
         socket_dir = os.path.join(_bt._socket_safe_tmpdir(), f"agent-browser-{session_name}")
         if os.path.exists(socket_dir):
+            daemon_pid = _read_pid_file(os.path.join(socket_dir, f"{session_name}.pid"))
             _kill_verified_daemon(socket_dir, session_name)
+            if daemon_pid is not None and _pid_exists(daemon_pid):
+                # Keep ownership evidence and activity so janitor retries are possible.
+                raise RuntimeError(f"Browser daemon {daemon_pid} is still alive after teardown")
             shutil.rmtree(socket_dir, ignore_errors=True)
+    _forget_session_tracking(task_id, session=True)
 
 
 def _force_reap_browser_session(task_id: str) -> None:
@@ -624,7 +630,6 @@ def _force_reap_browser_session(task_id: str) -> None:
     _cdp._stop_cdp_supervisor(task_id)
     with _bt._cleanup_lock:
         session_info = _bt._active_sessions.get(task_id)
-        _bt._session_last_activity.pop(task_id, None)
         _bt._recording_sessions.discard(task_id)
     if session_info:
         _release_session_resources(task_id, session_info)

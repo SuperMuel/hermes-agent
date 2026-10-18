@@ -548,6 +548,18 @@ See the MCP guide for the practical setup:
 
 ### Local browser mode
 
+To select an explicit Chromium executable instead of system-browser discovery, set:
+
+```yaml
+browser:
+  executable_path: /absolute/path/to/chrome
+  inactivity_timeout: 120
+```
+
+This override is applied to the credential-scrubbed agent-browser subprocess, including Browser Use mode's managed local browser. An unavailable explicit executable fails preflight instead of falling back to another browser. On headless Linux hosts with Snap Chromium, prefer an installed Playwright Chromium binary: Snap launch wrappers can prevent CDP startup and escape ordinary parent-process cleanup.
+
+The inactivity timeout is not a hard lifetime limit. Cleanup retains ownership records when a daemon cannot be terminated, allowing subsequent janitor and orphan-reaper attempts. For host-level crash containment, run disposable browsers in a dedicated systemd cgroup with a runtime limit. Do not apply disposable-profile cleanup to persistent authenticated profiles.
+
 If you do **not** set any cloud credentials and don't use `/browser connect`, Hermes can still use the browser tools through a local Chromium install driven by `agent-browser`.
 
 ### Optional Environment Variables

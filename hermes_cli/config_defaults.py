@@ -383,6 +383,7 @@ DEFAULT_CONFIG = {
         # browser_exec tool driving the Browser Use CLI over any CDP backend (local Chrome, cloud);
         # "off" = force the built-in browser_navigate/browser_click/... tools.
         "backend": "",
+        "executable_path": "",  # explicit local Chromium binary; never silently fall back
         "inactivity_timeout": 120,
         "command_timeout": 30,  # seconds per browser command (screenshot, navigate, etc.)
         "snapshot_threshold": 15000,  # max chars before snapshot truncate-and-store (min 1000)
