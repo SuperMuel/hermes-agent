@@ -557,7 +557,11 @@ _BUILTIN_REQUIREMENTS: dict[str, Callable[[], bool]] = {
     "deepinfra": lambda: _package_installed("openai") and bool(_resolve_provider_key("DEEPINFRA_API_KEY", "deepinfra")),
     "minimax": _minimax_requirements,
     "xai": _xai_requirements,
-    "gemini": lambda: bool(_resolve_provider_key("GEMINI_API_KEY", "gemini") or _resolve_provider_key("GOOGLE_API_KEY", "gemini")),
+    "gemini": lambda: bool(
+        _resolve_provider_key("GOOGLE_AI_API_KEY", "gemini")
+        or _resolve_provider_key("GEMINI_API_KEY", "gemini")
+        or _resolve_provider_key("GOOGLE_API_KEY", "gemini")
+    ),
     "mistral": lambda: _pm_extra_available("mistral") and bool(_resolve_provider_key("MISTRAL_API_KEY", "mistral")),
     "neutts": lambda: _check_neutts_available(),
     "kittentts": lambda: _check_kittentts_available(),

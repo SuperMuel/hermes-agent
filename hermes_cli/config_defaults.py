@@ -426,6 +426,7 @@ DEFAULT_CONFIG = {
         # browser_exec tool driving the Browser Use CLI over any CDP backend (local Chrome, cloud);
         # "off" = force the built-in browser_navigate/browser_click/... tools.
         "backend": "",
+        "executable_path": "",  # explicit local Chromium binary; never silently fall back
         "inactivity_timeout": 120,
         "command_timeout": 30,  # seconds per browser command (screenshot, navigate, etc.)
         "snapshot_threshold": 15000,  # max chars before snapshot truncate-and-store (min 1000)
@@ -1121,13 +1122,15 @@ DEFAULT_CONFIG = {
             "pcm_sample_rate": 24000,
         },
         "gemini": {
-            "model": "gemini-2.5-flash-preview-tts",
+            "model": "gemini-3.1-flash-tts-preview",
             "voice": "Kore",
             # Gemini 3.1: aux-model rewrite inserts [audio tags] into the TTS script only.
             "audio_tags": False,
             # Optional local text file with performance direction; may include a `{transcript}`
             # placeholder, else the live transcript is appended.
             "persona_prompt_file": "",
+            # Optional inline performance direction; takes precedence over the file above.
+            "prompt": "",
         },
         "xai": {
             "voice_id": "eve",  # or a custom voice ID (docs.x.ai custom voices)
