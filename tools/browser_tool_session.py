@@ -185,7 +185,7 @@ def _agent_browser_command_env(socket_dir: str) -> dict[str, str]:
     env = env_for("agent-browser", base_env=env)
     from hermes_cli.browser_runtime import chromium_executable
 
-    executable = chromium_executable()
+    executable = _install._configured_chromium_path() or chromium_executable()
     if executable:
         env["AGENT_BROWSER_EXECUTABLE_PATH"] = executable
     env["AGENT_BROWSER_SOCKET_DIR"] = socket_dir
@@ -951,7 +951,14 @@ def _run_browser_command(
 
     for attempt in range(2):
         try:
-            session_info = _get_session_info(task_id)
+            if command == "close":
+                # Teardown must not recycle a suspect browser or create a replacement.
+                with _bt._cleanup_lock:
+                    session_info = _bt._active_sessions.get(task_id)
+                if session_info is None:
+                    return {"success": True, "data": {}}
+            else:
+                session_info = _get_session_info(task_id)
         except Exception as e:
             _bt.logger.warning("Failed to create browser session for task=%s: %s", task_id, e)
             return {"success": False, "error": f"Failed to create browser session: {e!s}"}

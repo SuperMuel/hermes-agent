@@ -97,10 +97,21 @@ def warm_agent_browser_npx_cache(timeout: float = 60.0) -> bool:
     return False
 
 
+def _configured_chromium_path() -> str:
+    """Profile-local executable override, shared by readiness and daemon launch."""
+    from hermes_cli.config import cfg_get, read_raw_config
+    value = cfg_get(read_raw_config(), "browser", "executable_path", default="")
+    return os.path.expanduser(str(value or "").strip())
+
+
 def _chromium_installed() -> bool:
     """An explicit browser executable or PM's selected full Chromium exists."""
     from hermes_cli.browser_runtime import chromium_executable
 
+    configured = _configured_chromium_path()
+    if configured:
+        # Never silently fall back to a system/PM browser if a pin disappeared.
+        return os.path.isfile(configured) and (os.name == "nt" or os.access(configured, os.X_OK))
     ab_path = chromium_executable()
     return bool(ab_path and (os.path.isfile(ab_path) or shutil.which(ab_path)))
 

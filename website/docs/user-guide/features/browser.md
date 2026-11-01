@@ -593,6 +593,15 @@ See the MCP guide for the practical setup:
 
 If you do **not** set any cloud credentials and don't use `/browser connect`, Hermes can still use the browser tools through a local Chromium install driven by `agent-browser`.
 
+To pin a local Chromium executable, set its absolute path in the profile configuration:
+
+```yaml
+browser:
+  executable_path: /absolute/path/to/chrome
+```
+
+A configured path is applied to the credential-scrubbed `agent-browser` environment and fails readiness when the executable disappears instead of silently falling back to another browser. Browser teardown retains the session ownership record and socket when a daemon remains alive, allowing the janitor/orphan reaper to retry safely.
+
 ### Optional Environment Variables
 
 ```bash

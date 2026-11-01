@@ -185,7 +185,7 @@ def _cleanup_inactive_browser_sessions():
                     _force_reap_browser_session(task_id)
             except Exception as reap_exc:
                 _bt.logger.error("Force-reap of browser session %s failed: %s", task_id, reap_exc)
-            finally:
+            else:
                 _forget_session_tracking(task_id, activity=False)
 
 
@@ -660,8 +660,8 @@ def _release_session_resources(task_id: str, session_info: dict[str, Any]) -> No
     force-reap path (#100738), which skips the polite agent-browser/Camofox ``close`` that kept failing but
     must still release the cloud session and the local Chromium.
     """
-    _forget_session_tracking(task_id, session=True)
     _release_session_backend(task_id, session_info)
+    _forget_session_tracking(task_id, session=True)
 
 
 def _release_session_backend(task_id: str, session_info: dict[str, Any]) -> None:
@@ -680,7 +680,11 @@ def _release_session_backend(task_id: str, session_info: dict[str, Any]) -> None
     if session_name:
         socket_dir = os.path.join(_bt._socket_safe_tmpdir(), f"agent-browser-{session_name}")
         if os.path.exists(socket_dir):
+            daemon_pid = _read_pid_file(os.path.join(socket_dir, f"{session_name}.pid"))
             _kill_verified_daemon(socket_dir, session_name)
+            if daemon_pid is not None and _pid_exists(daemon_pid):
+                # Keep ownership evidence and activity so janitor retries are possible.
+                raise RuntimeError(f"Browser daemon {daemon_pid} is still alive after teardown")
             shutil.rmtree(socket_dir, ignore_errors=True)
 
 
@@ -692,7 +696,6 @@ def _force_reap_browser_session(task_id: str) -> None:
     _cdp._stop_cdp_supervisor(task_id)
     with _bt._cleanup_lock:
         session_info = _bt._active_sessions.get(task_id)
-        _bt._session_last_activity.pop(task_id, None)
         _bt._recording_sessions.discard(task_id)
     if session_info:
         _release_session_resources(task_id, session_info)

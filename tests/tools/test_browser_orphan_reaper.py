@@ -96,7 +96,7 @@ class TestReapOrphanedBrowserSessions:
         def mock_terminate(pid, expected_start=None):
             terminate_calls.append(pid)
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("gateway.status._pid_exists", side_effect=lambda pid: pid not in terminate_calls), \
              patch("gateway.status.get_process_start_time", return_value=777), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid", side_effect=mock_terminate):
@@ -116,7 +116,7 @@ class TestReapOrphanedBrowserSessions:
         terminate_calls = []
 
         def _pid_exists(pid):
-            return pid == 4242  # daemon alive, owning hermes gone
+            return pid == 4242 and pid not in terminate_calls
 
         with patch("gateway.status._pid_exists", side_effect=_pid_exists), \
              patch("gateway.status.get_process_start_time", return_value=777), \
@@ -410,7 +410,7 @@ class TestLeakedDaemonWithLiveOwner:
         _age_socket_dir(d, BROWSER_ORPHAN_GRACE_SECONDS + 600)
         kill_calls = []
 
-        with patch("gateway.status._pid_exists", return_value=True), \
+        with patch("gateway.status._pid_exists", side_effect=lambda pid: pid not in kill_calls), \
              patch("gateway.status.get_process_start_time", return_value=777), \
              patch("tools.browser_tool_lifecycle._verify_reapable_browser_daemon", return_value=True), \
              patch("tools.process_registry.ProcessRegistry._terminate_host_pid",
